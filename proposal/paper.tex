@@ -1,0 +1,162 @@
+\frenchspacing
+\documentclass[letterpaper,twocolumn,10pt]{article}
+\usepackage[twoside=true, head=13pt,
+     paperwidth=8.5in, paperheight=11in,
+     includeheadfoot=false, columnsep=2pc,
+     top=1in, bottom=1in, inner=0.75in, outer=0.75in,
+     marginparwidth=2pc,heightrounded]{geometry}
+
+\usepackage{graphicx}
+\usepackage[tt=false, type1=true]{libertine}
+\usepackage{mathptmx}
+\usepackage{amssymb}
+\usepackage[varqu]{zi4}
+\usepackage[T1]{fontenc}
+\usepackage{enumitem}
+% Make caption font different from other fonts
+\usepackage[font={footnotesize},labelfont={footnotesize,bf},textfont={footnotesize,it}]{caption}
+\interfootnotelinepenalty=10000
+
+\usepackage[hidelinks]{hyperref}
+\usepackage{tabularx,booktabs,array}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+\title{Designing AI Training Clusters with Simulation:\\From GPT-3 to Mixture-of-Experts Workloads}
+\author{Yiheng Fan \& Ying Xiong \\ CS514 Advanced Network --- Project Proposal}
+\date{}
+
+\begin{document}
+\pagestyle{plain}
+\maketitle
+\begin{abstract}
+Network bandwidth and parallelization choices jointly determine the performance of distributed large language model training. This project will use SimAI and AICB to reproduce two GPT-3 175B design studies from the SimAI paper---per-GPU network bandwidth and tensor-parallel (TP) group size---and then ask whether their conclusions transfer to a DeepSeek mixture-of-experts (MoE) training workload, whose expert-parallel (EP) all-to-all traffic differs sharply from GPT-3's. All experiments use SimAI's analytical mode on a local computer. Because we have no access to the paper's GPUs, we will calibrate computation time to values the paper itself reports, so our replication is conditional on these computation assumptions rather than an independent validation of the simulator. Results will distinguish reproduced trends from calibration-dependent estimates, and we will discuss how the assumption of evenly loaded experts may bias the MoE conclusions.
+\end{abstract}
+
+\section{Introduction}
+Training clusters must balance GPU computation with communication across devices and hosts. Increasing network capacity can reduce communication stalls, but the benefit depends on the workload, parallelization strategy, and computation speed. Simulation provides a practical way to explore these choices without access to a large physical GPU cluster.
+
+SimAI integrates computation and communication modeling for distributed training~\cite{simai}. Its Section~5 studies network bandwidth and TP group size. The bandwidth result is hardware-dependent: for H20, going from 100 to 200~Gbit/s per GPU improves training performance by 11\% but going from 200 to 400~Gbit/s adds only 6\%, whereas for the faster H100 the 200-to-400~Gbit/s upgrade still yields 19\%. We will therefore test diminishing returns under specified configurations rather than assume that 200~Gbit/s is universally sufficient.
+
+The project extends this investigation to a DeepSeek MoE workload. Routing tokens between EP ranks introduces all-to-all communication. Whether that traffic stays on NVSwitch inside a host or crosses the inter-host network depends on the EP group size and the host size, which may change both the value of network bandwidth and the best host design. Our contribution will be a reproducible comparison of design trends, together with a clear account of which conclusions depend on modeling assumptions.
+
+\section{Research Questions}
+\begin{enumerate}[leftmargin=*,itemsep=2pt,topsep=3pt]
+\item How does per-GPU network bandwidth affect GPT-3 175B iteration time on H100- and H20-class GPUs, and can analytical simulation recover the paper's trends (19\% vs.\ 6\% gain from 200 to 400~Gbit/s)?
+\item How does TP group size affect GPT-3 175B performance as the number of NVSwitch-connected GPUs per host grows from 8 to 64?
+\item For a DeepSeek MoE workload, how do bandwidth and host size interact with EP group size, especially when EP groups grow beyond one host and all-to-all traffic moves onto the inter-host network?
+\end{enumerate}
+We hypothesize that once EP groups span hosts, exposed all-to-all communication will make the MoE workload more sensitive to inter-host bandwidth than GPT-3 is, so that 200~Gbit/s may no longer be sufficient even for H20-class GPUs. This is a hypothesis to test, not an assumed outcome: computation--communication overlap and group placement may limit the effect.
+
+\section{Related Work and Positioning}
+Table~\ref{tab:position} compares SimAI with four related papers. ASTRA-sim provides a distributed-training simulation foundation that SimAI itself started from; ASTRA-sim2.0 adds hierarchical networks and flexible parallelism. Megatron-LM measures how tensor, pipeline, and data parallelism interact in real training. Odin targets congestion control under the all-to-all traffic that MoE training generates, which is the traffic pattern our extension studies.
+
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.11\textwidth}LL>{\raggedright\arraybackslash}p{0.17\textwidth}L@{}}
+\toprule
+Paper & Main question & How performance is obtained & MoE / all-to-all & Role in this project \\
+\midrule
+SimAI~\cite{simai} & Host design and parallelization for large-scale LLM training & Simulation (analytical and ns-3 packet-level), validated against production clusters & Workloads via AICB; assumes evenly loaded experts & Seed paper: reproduce Figures~10 and 11(b); simulator for the extension \\
+ASTRA-sim~\cite{astra} & SW/HW co-design of distributed DL training platforms & Simulation of collectives over a modeled network & Not LLM-MoE specific & Simulator SimAI grew out of; collective modeling background \\
+ASTRA-sim2.0~\cite{astra2} & Hierarchical networks, flexible parallelism, disaggregated memory & Simulation with multi-dimensional topologies & Not LLM-MoE specific & Context for multi-level (NVSwitch + NIC) bandwidth and group placement \\
+Megatron-LM~\cite{megatron} & Combining tensor, pipeline, and data parallelism efficiently & Measurements on real GPU clusters & Dense models only & Explains TP communication cost and why TP is kept within a host \\
+Odin~\cite{odin} & Congestion control under all-to-all traffic & Packet-level transport behavior & Central focus & Motivates the MoE traffic question and the optional DCQCN/HPCC study \\
+\bottomrule
+\end{tabularx}
+\caption{Positioning of the seed paper against four related papers. These are conceptual comparisons, not new benchmark results.}
+\label{tab:position}
+\end{table*}
+
+The selected results are worth checking because they guided real, expensive hardware decisions (the 200~Gbit/s H20 host design) and because the TP result is counter-intuitive: the paper finds that a larger TP group on a larger NVSwitch host can be \emph{slower}, and that extra GPUs per host are better spent on more data-parallel groups. Both conclusions were derived for a dense model. MoE models add all-to-all traffic whose placement depends on host size, so it is not obvious whether the bandwidth guidance (200~Gbit/s per GPU for H20) still holds, or whether the best parallelization for a given host size stays the same once expert parallelism is added. This project extends their evaluation to MoE; it does not propose a new simulator.
+
+\section{Methodology}
+\subsection{Tools and Baseline}
+We will use AICB to generate training workloads and SimAI-Analytical to estimate iteration time~\cite{simai-code,aicb}. Both run on a CPU in a Linux environment (WSL2 or a container) on a local computer; no model is trained and no GPU cluster is needed. We will pin and record the exact commits of both repositories, because simulator options differ between releases (e.g., the documentation describes both a user-supplied bus-bandwidth file and bandwidth derived from NVLink, NIC, and per-server parameters; we will record which mechanism our pinned version uses). We will also record build dependencies, workload parameters, and simulator commands.
+
+The first milestone is a working GPT-3 175B workload at 1,024 GPUs with validated collective types, message sizes, and parallel groups. The paper's benchmark suite (Table~3) lists GPT-3 175B with TP~$=8$, PP~$=8$, and sequence length 2,048; we will start from these values, but whether Section~5 used exactly these settings, and which batch sizes it used, still needs to be verified against the public artifacts. Unverified settings will be chosen and documented in a configuration checklist, and approximated configurations will be labeled as trend reproductions.
+
+\subsection{Computation-Time Calibration}
+Without AICB's GPU profiler (AIOB), workloads are filled with a fixed default computation time, which cannot distinguish an H100 from an H20. H100 and H20 differ mainly in computation speed but also in memory and possibly in effective collective-communication performance, so we will set computation and communication parameters separately for each GPU type and list any parameter we cannot obtain as an explicit assumption. Computation will be calibrated to the paper's own data:
+\begin{enumerate}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item First confirm what the computation segment of Figure~10's bars represents (e.g., total computation versus computation not overlapped with communication), then digitize it from a \emph{single} reference point per GPU type, the 100~Gbit/s SimAI bar.
+\item Distribute this total across the workload's computation operations in proportion to each operation's FLOP count, and supply the result to AICB as a computation-time file. This is an approximation: memory-bound operations with few FLOPs (e.g., normalization and element-wise operations) can take disproportionate time.
+\item Freeze all parameters after calibration and \emph{predict} the 200 and 400~Gbit/s points; no parameter is tuned per data point.
+\end{enumerate}
+Agreement at the predicted points is therefore a \emph{conditional} replication: it shows that the bandwidth trends follow given our computation assumptions, not that the simulator is independently validated. SimAI-Analytical also takes the computation--communication overlap ratio of each parallel group (TP, DP, EP, PP) as an input, defaulting to 0 (no overlap), so overlap is an assumption rather than a simulator prediction. We will record these ratios, use the default as the main setting, and report a sensitivity run with nonzero DP overlap. For Figure~11(b), changing TP changes per-GPU work; we will rescale computation using the same per-GPU effective throughput (FLOP/s) implied by the calibration. This ignores the lower kernel efficiency of smaller matrix shards at large TP, which we will treat as a limitation and probe with sensitivity analysis. As an optional cross-check, if AIOB runs on our local RTX~5060~Ti (16~GB), we will use its per-operation profile only to set the relative split of computation among operations, still scaling the total to the calibrated value; the project does not depend on this.
+
+\subsection{GPT-3 Replication}
+\textbf{Figure~10: bandwidth.} We will simulate GPT-3 175B on 1,024 GPUs at 100, 200, and 400~Gbit/s per GPU, i.e., 12.5, 25, and 50~GB/s of NIC bandwidth per GPU, with separate H100 and H20 computation calibrations. GPU count, batch size, sequence length, placement, intra-host bandwidth, and computation will remain fixed within each sweep. Because nominal NIC rates differ from achievable collective bandwidth, we will report both the nominal setting and the effective bus bandwidth the simulator uses.
+
+\textbf{Figure~11(b): scale-up and TP.} We will model NVSwitch hosts with 8, 16, 32, and 64 GPUs and reproduce the plotted GPT-3 175B TP sizes: 8 on an 8-GPU host; 8 or 16 on a 16-GPU host; and 8, 16, or 32 on 32- and 64-GPU hosts. As in the paper, TP groups stay within a host and TP must divide both the number of layers (96) and the world size (1,024). The number of NICs per host will scale with GPUs per host so that per-GPU network bandwidth stays constant; we will use 400~Gbit/s per GPU for H100 and 200~Gbit/s for H20, matching the production designs in Section~5.1. We will simulate both the H100 and H20 panels, keep the global batch fixed, and log the resulting data-parallel size and gradient accumulation for each point.
+
+\subsection{DeepSeek MoE Extension}
+We will generate a DeepSeek \emph{training} workload with AICB's built-in DeepSeek~16B model configuration (\texttt{-m deepseek16}), the one used in AICB's documented SimAI example (top-6 routing, TP~$=1$, sequence length 4,096)~\cite{aicb}. The exact architecture, expert count, precision, and parallel settings will be saved with the workload. We first validate a small configuration to confirm that the workload contains the expected token dispatch/combine all-to-all operations and that SimAI-Analytical times them.
+
+The main study uses 1,024 GPUs and TP~$=1$, following DeepSeek practice of using expert parallelism instead of tensor parallelism. Sweeping EP therefore replaces, rather than repeats, the paper's TP study: for MoE, the main parallelization choice is how widely experts are spread. As a small control, if the generator supports it, we will also run TP~$\in\{1,2,4\}$ at one EP size and 200~Gbit/s. Across all MoE configurations we keep the global batch, sequence length, and tokens per iteration fixed. The sweeps are:
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \textbf{Bandwidth $\times$ EP:} 100/200/400~Gbit/s per GPU with EP $\in \{8, 16, 32, 64\}$ (keeping only sizes that divide the model's routed-expert count and the world size). On 8-GPU hosts, EP~$=8$ can keep all-to-all inside a host while EP~$\ge 16$ forces it onto the network, giving a direct test of our hypothesis.
+\item \textbf{Host size $\times$ EP:} the MoE analog of Figure~11, with hosts of 8, 16, and 32 GPUs. Larger scale-up domains can keep larger EP groups on NVSwitch, so we ask whether MoE changes the paper's host-design guidance.
+\end{itemize}
+For each configuration we will record, from the generated workload and the simulator's group mapping, what fraction of all-to-all traffic stays within a host. Computation uses the H100 and H20 per-GPU effective throughput calibrated on GPT-3, applied to DeepSeek's per-GPU FLOPs. This is a cross-model approximation (MoE expert kernels and attention differ from GPT-3's), not a measurement of real H100/H20 performance, so DeepSeek results will be interpreted as trends and covered by the same $\pm25\%$ sensitivity analysis. We will also make a back-of-the-envelope memory check (parameters, gradients, and optimizer state per GPU) against 80~GB (H100) and 96~GB (H20), because the analytical simulator does not model memory. Raw iteration times of GPT-3 and DeepSeek are not directly comparable, so cross-model conclusions will use normalized speedups and communication fractions.
+
+\section{Evaluation and Limitations}
+The primary metric is simulated time per training iteration. For each configuration, we will report speedup relative to its 100~Gbit/s baseline and the fractional reduction from each bandwidth doubling, $(T_B-T_{2B})/T_B$, and break iteration time into computation, TP, DP, and EP (all-to-all) communication, together with the overlap ratios assumed for each run.
+
+\textbf{Replication criteria.} For Figure~10 we will compare our TP and DP communication components and total iteration times at the predicted (uncalibrated) points with values digitized from the figure (recording digitization uncertainty), and our relative gains with the 19\%, 11\%, and 6\% reported in the text. Figure~11 is normalized per cluster, so we will normalize our results the same way and compare both values and the ranking of TP sizes. A provisional target is within 10\% of matched points and agreement on the paper's three qualitative findings (the optimal TP size on an 8-GPU host; performance improving with host size at fixed TP; and larger TP sometimes hurting). This is our diagnostic threshold, not the paper's accuracy claim. Discrepancies will be traced to units, group mappings, calibration, and simulator versions before we start the extension. To show which conclusions depend on calibration, we will vary computation time by $\pm25\%$ and report whether the rankings change. Analytical runs are deterministic, so we report sensitivity ranges rather than confidence intervals.
+
+A central limitation is AICB's assumption that tokens are split evenly across experts. Real routing is skewed: the most loaded EP rank receives more tokens, which lengthens both its expert computation and its all-to-all transfers, and every other rank waits for it. Balanced-load results are therefore likely optimistic; whether the optimism grows with EP size and with lower bandwidth is a possibility we will examine, not an assumption. We will run a heuristic sensitivity analysis that scales the all-to-all and expert-computation times by a maximum-to-mean load factor (e.g., 1.5 and 2), and, if the workload format permits unequal per-rank messages, simulate skew directly. These scaled scenarios illustrate how conclusions could shift; they are not guaranteed upper or lower bounds on real performance.
+
+Analytical simulation also abstracts packet queues and congestion control, so the core study makes no claims about DCQCN versus HPCC. A small packet-level comparison under MoE all-to-all traffic is optional, only after the core experiments are complete.
+
+\section{Plan and Expected Outcomes}
+\textbf{Oct.~15--25:} Build SimAI and AICB, generate and validate the GPT-3 workload, digitize Figures~10 and~11, and implement the calibration. \textbf{Oct.~26--Nov.~5:} Reproduce Figures~10 and~11(b), quantify agreement, and prepare one GPT-3 bandwidth run as the live mid-project demo. \textbf{Nov.~6--16:} Run the DeepSeek sweeps and the load-skew and calibration sensitivity analyses. \textbf{Nov.~17/19:} Present. \textbf{Nov.~20--Dec.~8:} Resolve discrepancies, write the report, and package code and raw outputs. These dates follow the project handout; the course syllabus remains authoritative.
+
+\textbf{Teamwork.} Both team members will work jointly on every stage of the project: building the tools, calibrating computation, reproducing Figures~10 and~11(b), running the DeepSeek sweeps, and writing the report and slides. We will meet regularly, review and cross-check each other's configurations and results, and commit our own work to the shared repository, so that its history reflects both members' contributions. Both of us will be able to explain the workload generator, the calibration, the simulator assumptions, and every result during the demo and presentation.
+
+Deliverables include versioned configurations, the calibration and sweep scripts, raw simulator outputs, plotting code, step-by-step rerun instructions in a git repository whose history reflects our work, and a final report. Success means explaining when bandwidth or parallelism choices change performance and whether those trends transfer to MoE, even if the results contradict our hypothesis. If tool compatibility restricts the study, we will prioritize the validated GPT-3 replication and the bandwidth $\times$ EP sweep and clearly state the reduced scope.
+
+\paragraph{AI-use disclosure.} OpenAI Codex assisted with drafting this proposal, checking source materials, and organizing the experimental plan. Anthropic's Claude reviewed the draft against the project handout and the seed paper, checked feasibility against the SimAI and AICB documentation, and suggested revisions (computation calibration, EP sizes that cross hosts, and the extended positioning table), which we reviewed and accepted. No simulation experiments have been run for this proposal, and no new measured results are claimed.
+
+% References are inline so this source compiles in a standalone LaTeX editor.
+% Matching BibTeX records are also provided in bibs.bib.
+\begin{thebibliography}{9}
+\bibitem{simai}
+Xizheng Wang et al.
+\newblock SimAI: Unifying Architecture Design and Performance Tuning for Large-Scale Large Language Model Training with Scalability and Precision.
+\newblock In \emph{USENIX NSDI}, pp.~541--558, 2025.
+\newblock \href{https://www.usenix.org/conference/nsdi25/presentation/wang-xizheng-simai}{USENIX paper and artifacts}.
+
+\bibitem{simai-code}
+Alibaba Cloud.
+\newblock SimAI: Source code and analytical simulation tutorial.
+\newblock \url{https://github.com/aliyun/SimAI}.
+
+\bibitem{aicb}
+Alibaba Cloud.
+\newblock AICB: Artificial Intelligence Communication Benchmark.
+\newblock \url{https://github.com/aliyun/aicb}.
+
+\bibitem{astra}
+Saeed Rashidi, Srinivas Sridharan, Sudarshan Srinivasan, and Tushar Krishna.
+\newblock ASTRA-SIM: Enabling SW/HW Co-Design Exploration for Distributed DL Training Platforms.
+\newblock In \emph{IEEE ISPASS}, 2020.
+
+\bibitem{astra2}
+William Won et al.
+\newblock ASTRA-sim2.0: Modeling Hierarchical Networks and Disaggregated Systems for Large-model Training at Scale.
+\newblock In \emph{IEEE ISPASS}, pp.~283--294, 2023.
+
+\bibitem{megatron}
+Deepak Narayanan et al.
+\newblock Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM.
+\newblock In \emph{SC}, 2021.
+
+\bibitem{odin}
+Wanchun Jiang, Yujie Hu, Kai Wang, Xiao Han, Haoran Wei, Yong Zhang, Jianxi Ye, and Huichen Dai.
+\newblock Odin: Rethinking Congestion Control under All-to-All Traffic.
+\newblock In \emph{ACM SIGCOMM}, 2026.
+\end{thebibliography}
+\end{document}
