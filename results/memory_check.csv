@@ -1,0 +1,10 @@
+model,world,tp,pp,ep,params_B,state_GB,fits_80GB_H100,fits_96GB_H20
+GPT-3 175B,1024,8,8,1,174.56,18.41,True,True
+DeepSeek-V2-Lite,1024,1,1,8,15.71,18.85,True,True
+DeepSeek-V2-Lite,1024,1,1,16,15.71,13.45,True,True
+DeepSeek-V2-Lite,1024,1,1,32,15.71,10.75,True,True
+DeepSeek-V2-Lite,1024,1,1,64,15.71,9.4,True,True
+DeepSeek-V2-Lite,256,1,1,8,15.71,19.4,True,True
+DeepSeek-V2-Lite,256,1,1,16,15.71,14.0,True,True
+DeepSeek-V2-Lite,256,1,1,32,15.71,11.3,True,True
+DeepSeek-V2-Lite,256,1,1,64,15.71,9.95,True,True
