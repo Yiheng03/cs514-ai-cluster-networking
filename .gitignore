@@ -13,6 +13,8 @@ Thumbs.db
 *.synctex.gz
 *.bbl
 *.blg
+*.nav
+*.snm
 
 # Local scratch files and backups
 tmp/
