@@ -1,0 +1,3 @@
+[submodule "third_party/SimAI"]
+	path = third_party/SimAI
+	url = https://github.com/aliyun/SimAI.git

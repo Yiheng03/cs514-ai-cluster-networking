@@ -1,0 +1,14 @@
+diff --git a/workload_generator/SimAI_training_workload_generator.py b/workload_generator/SimAI_training_workload_generator.py
+index 698ff98..d90b463 100755
+--- a/workload_generator/SimAI_training_workload_generator.py
++++ b/workload_generator/SimAI_training_workload_generator.py
+@@ -54,6 +54,9 @@ class Work_Item:
+ 
+ def _get_aiob_compute_time(compute_cache, forward_or_backward, stage, dowarn=True):
+     compute_time_map = compute_cache
++    # No compute cache when AIOB is off; use the default placeholder time.
++    if compute_time_map is None:
++        return 1
+ 
+     # if compute time with exact layer name exist, use it without prefix
+     if stage in compute_time_map.keys():
