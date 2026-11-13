@@ -1,0 +1,15 @@
+{
+  "throughput_flops": {
+    "H100": 164262602215091.62,
+    "H20": 34966970738586.285
+  },
+  "reference": "Fig.10 SimAI bar at 100 Gbit/s, computation segment",
+  "target_s": {
+    "H100": 0.9661,
+    "H20": 4.5384
+  },
+  "global_batch": 64,
+  "flops_per_gpu_iter": 137301514518528.0,
+  "simai_commit": "a57d765c5478f319c5f5ab6fdc53f9cc7f461743",
+  "aicb_commit": "23eec3c48ca2d2d93dd888a4c7b22ab4421e782f"
+}
