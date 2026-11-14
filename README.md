@@ -45,6 +45,7 @@ data/                  digitized paper values (CSV)
 results/               tidy result tables (CSV) + calibration.json
 results/raw/           every SimAI-Analytical output CSV, one per run
 figures/               report figures (PDF)
+demo/                  Docker-based quick demo (see demo/README.md)
 patches/               small AICB patch (DeepSeek workloads without a GPU)
 third_party/SimAI/     SimAI + AICB source (git submodule)
 ```
@@ -67,6 +68,9 @@ sh run_all.sh                     # ~45 min; optional arg: paper PDF to re-digit
 ```
 
 `SIMAI_ROOT` can point to a SimAI checkout elsewhere.
+
+For a short check that everything builds and runs (about 5 minutes, Docker
+only), see [demo/README.md](demo/README.md).
 
 ## Assumptions we made (details in `simtools/config.py` and the report)
 
